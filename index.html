@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>Checklist Vehicular Diario</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React 18 + ReactDOM UMD (prod) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- We'll write plain JS (no JSX) to avoid Babel at runtime -->
+    <!-- QRCode UMD -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+    <style>html,body{background:#f8fafc}</style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+    // Lightweight QR Canvas wrapper
+    function QRCodeCanvas(props){
+      var value = props.value || "", size = props.size || 180, includeMargin = props.includeMargin!==false;
+      var c = document.createElement("canvas");
+      var opts = { margin: includeMargin ? 1 : 0, width: size };
+      QRCode.toCanvas(c, value || "", opts);
+      c.style.width = size+"px"; c.style.height = size+"px";
+      return c;
+    }
+
+    // -----------------------------
+    // App (plain JS without JSX)
+    // -----------------------------
+    const STORAGE_KEY = "veh-checklists";
+    const OUTBOX_KEY  = "veh-outbox";
+    const FLOW_ENDPOINT = ""; // opcional, se puede pasar via ?flow=
+    const DB_DEFAULT_URL = "https://collahuasicl-my.sharepoint.com/:x:/r/personal/emcuadrap_collahuasi_cl/Documents/Servicios/CheckList%20Camionetas/CheckList.xlsx?d=w104d90b3b80b422ba9f43bff0dd815d6&csf=1&web=1&e=k2rroD";
+
+    const ITEMS = [
+      { title:"Declaraciones del conductor", key:"driver_decl", items:[
+        {id:"respeto_velocidad",label:"Respeto límites de velocidad internos/externos"},
+        {id:"no_celular",label:"No uso celular/distractores al conducir"},
+        {id:"apto_jornada",label:"Apto para conducir hoy"},
+        {id:"no_alcohol_drogas",label:"No estoy bajo efectos de alcohol/drogas/medicamentos incompatibles"},
+        {id:"pasajeros_limite",label:"Pasajeros ≤ asientos con cinturón 3 puntas"},
+      ]},
+      { title:"Documentos del vehículo", key:"docs", items:[
+        {id:"revision_tecnica",label:"Revisión Técnica"},
+        {id:"permiso_circulacion",label:"Permiso de Circulación"},
+        {id:"seguro_obligatorio",label:"Seguro Obligatorio"},
+        {id:"licencia_conducir",label:"Licencia Conducir (portada)"},
+      ]},
+      { title:"Elementos de seguridad", key:"safety", items:[
+        {id:"cinturon_seguridad",label:"Cinturón de Seguridad"},
+        {id:"espejos",label:"Espejos"},
+        {id:"asientos",label:"Asientos"},
+        {id:"freno_mano",label:"Freno de Mano"},
+        {id:"freno_pedal",label:"Freno de Pedal"},
+        {id:"extintor",label:"Extintor montado"},
+        {id:"botiquin",label:"Botiquín"},
+        {id:"micas",label:"Micas"},
+        {id:"triangulos",label:"Triángulos"},
+        {id:"vidrios",label:"Vidrios"},
+        {id:"llave_rueda",label:"Llave de Rueda"},
+        {id:"gata",label:"Gata"},
+        {id:"varillas_gata_3tn",label:"Varillas para Gata 3Tn"},
+        {id:"trabavolante",label:"Trabavolante"},
+        {id:"herramientas",label:"Herramientas"},
+        {id:"abs",label:"ABS operativo"},
+        {id:"airbags",label:"Airbags operativos"},
+        {id:"cuñas_2",label:"Cuñas (≥2) disponibles"},
+      ]},
+      { title:"Pre-uso adicional (EPF)", key:"preuso", items:[
+        {id:"direccion",label:"Dirección sin juego anormal"},
+        {id:"neumaticos_estado",label:"Neumáticos en buen estado"},
+        {id:"neumaticos_presion",label:"Presión de neumáticos OK"},
+        {id:"neumaticos_no_recauchados",label:"Neumáticos NO recauchados"},
+        {id:"bocina",label:"Bocina operativa"},
+        {id:"limpia_parabrisas",label:"Limpia parabrisas operativo"},
+        {id:"aire_acondicionado",label:"Aire acondicionado operativo"},
+      ]},
+      { title:"Luces", key:"lights", items:[
+        {id:"focos_delanteros",label:"Focos Delanteros"},
+        {id:"neblineros_bajos",label:"Neblineros Bajos"},
+        {id:"focos_busca_camino",label:"Focos Busca Camino"},
+        {id:"focos_retroceso",label:"Focos de Retroceso"},
+        {id:"luces_viraje",label:"Luces de Viraje"},
+        {id:"luces_bajas_encendidas",label:"Luces bajas encendidas durante desplazamiento"},
+      ]},
+      { title:"Retroceso y ayudas", key:"retroceso", items:[
+        {id:"alarma_retroceso",label:"Alarma de retroceso"},
+        {id:"camara_retroceso",label:"Cámara de retroceso"},
+      ]},
+      { title:"Carga y separación", key:"carga", items:[
+        {id:"rejilla_separacion",label:"Rejilla/barrera carga-pasajeros"},
+        {id:"trincaje_malla",label:"Cintas de trincaje / malla pickup"},
+        {id:"seguro_tuercas",label:"Seguro de tuercas"},
+      ]},
+      { title:"Requisitos Área Mina", key:"mina", onlyMina:true, items:[
+        {id:"radio_bidireccional",label:"Radio bidireccional"},
+        {id:"pertiga_banderola",label:"Pértiga con banderola"},
+        {id:"baliza",label:"Baliza estroboscópica"},
+        {id:"identificacion_visible",label:"N° de identificación visible"},
+        {id:"cintas_reflectantes",label:"Cintas reflectantes"},
+      ]},
+    ];
+
+    function getActiveGroups(areaMina){ return ITEMS.filter(g=>!g.onlyMina || areaMina); }
+    function defaultAnswers(){ const a={}; ITEMS.forEach(g=>g.items.forEach(it=>a[it.id]={value:"",obs:""})); return a; }
+    function validateAnswers(ans, areaMina){ for(const g of getActiveGroups(areaMina)) for(const it of g.items){const a=ans[it.id]||{}; if(!a.value) return false; if(a.value==="NO" && !a.obs) return false;} return true; }
+    function todayISODate(){ const d=new Date(); const tz=d.getTimezoneOffset(); const local=new Date(d.getTime()-tz*60000); return local.toISOString().slice(0,10); }
+    function nowLocalTime(){ const d=new Date(); return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"); }
+    function toCSV(rows){ if(!rows.length) return ""; const headers=Object.keys(rows[0]); const esc=v=>{ if(v==null) return ""; const s=String(v).replaceAll('"','""'); return '"'+s+'"' }; const out=[headers.map(esc).join(",")]; for(const r of rows) out.push(headers.map(h=>esc(r[h])).join(",")); return out.join("\n"); }
+
+    async function sendToSharePoint(row, endpoint){
+      const url = endpoint || FLOW_ENDPOINT;
+      if(!url) return {ok:false, skipped:true, msg:"Falta configurar FLOW_ENDPOINT"};
+      try{
+        const res = await fetch(url,{method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(row)});
+        let data={}; try{ data = await res.json(); }catch{}
+        const ok = res.ok && (data.ok===undefined || data.ok===true);
+        return {ok, status:res.status, data};
+      }catch(err){ return {ok:false, error:String(err)}; }
+    }
+
+    function App(){
+      const ReactRef = React; // shorthand
+      const {useState, useEffect, useMemo} = ReactRef;
+      const params = new URLSearchParams(location.search);
+      const kiosk = params.get("kiosk")==="1";
+      const [date,setDate] = useState(todayISODate());
+      const [time,setTime] = useState(nowLocalTime());
+      const [turno,setTurno] = useState("Día");
+      const [conductor,setConductor] = useState(params.get("conductor")||"");
+      const [codigo,setCodigo] = useState(params.get("codigo")||"");
+      const [patente,setPatente] = useState(params.get("patente")||"");
+      const [kilometraje,setKilometraje] = useState("");
+      const [answers,setAnswers] = useState(defaultAnswers);
+      const [observaciones,setObservaciones] = useState("");
+
+      const [areaMina,setAreaMina] = useState(false);
+      const [idVehiculo,setIdVehiculo] = useState("");
+      const [licenciaClase,setLicenciaClase] = useState("");
+      const [licenciaVence,setLicenciaVence] = useState("");
+      const [autorizacionInterna,setAutorizacionInterna] = useState("SI");
+      const [experienciaAnios,setExperienciaAnios] = useState("");
+      const [mantUltima,setMantUltima] = useState("");
+      const [mantProxima,setMantProxima] = useState("");
+      const [certTecnicaFecha,setCertTecnicaFecha] = useState("");
+      const [extintorVence,setExtintorVence] = useState("");
+      const [horasSueno24h,setHorasSueno24h] = useState("");
+      const [ultimoDescansoHora,setUltimoDescansoHora] = useState("");
+
+      const [syncStatus,setSyncStatus] = useState({ok:null, msg:""});
+      const [saved,setSaved] = useState(()=>{ try{return JSON.parse(localStorage.getItem(STORAGE_KEY)||"[]")}catch{return []}});
+      const [outbox,setOutbox] = useState(()=>{ try{return JSON.parse(localStorage.getItem(OUTBOX_KEY)||"[]")}catch{return []}});
+
+      const baseUrl = location.origin+location.pathname;
+      const [publicUrl,setPublicUrl] = useState(localStorage.getItem("veh-public-url")||baseUrl);
+      const [flowUrl,setFlowUrl] = useState(params.get("flow")||localStorage.getItem("veh-flow")||FLOW_ENDPOINT||"");
+      const [csvUrl,setCsvUrl] = useState(localStorage.getItem("veh-csv-url")||DB_DEFAULT_URL||"");
+
+      useEffect(()=>{ localStorage.setItem("veh-csv-url", csvUrl); },[csvUrl]);
+      useEffect(()=>{ localStorage.setItem("veh-flow", flowUrl); },[flowUrl]);
+      useEffect(()=>{ localStorage.setItem("veh-public-url", publicUrl); },[publicUrl]);
+      useEffect(()=>{ localStorage.setItem(OUTBOX_KEY, JSON.stringify(outbox)); },[outbox]);
+
+      useEffect(()=>{ const h=()=>flushOutbox(); addEventListener("online",h); return ()=>removeEventListener("online",h); },[outbox]);
+      async function flushOutbox(){
+        if(!flowUrl || outbox.length===0) return;
+        let okCount=0; const remaining=[];
+        for(const r of outbox){
+          const resp = await sendToSharePoint(r, flowUrl);
+          if(resp.ok) okCount++; else remaining.push(r);
+        }
+        setOutbox(remaining);
+        setSyncStatus({ok: remaining.length===0, msg: remaining.length===0?`Reenviados ${okCount} pendientes ✅`:`Reenviados ${okCount}. Pendientes: ${remaining.length}`});
+      }
+
+      function handleSelect(id,val){ setAnswers(prev=>({ ...prev, [id]: { ...(prev[id]||{obs:""}), value:val } })); }
+      function handleObs(id,txt){ setAnswers(prev=>({ ...prev, [id]: { ...(prev[id]||{value:""}), obs:txt } })); }
+
+      const canSubmit = useMemo(()=>{
+        const baseOk = conductor && patente && turno && date && time && kilometraje;
+        if(!baseOk) return false;
+        return validateAnswers(answers, areaMina);
+      },[conductor,patente,turno,date,time,kilometraje,answers,areaMina]);
+
+      function buildRow(){
+        const row = {
+          fecha:date,hora:time,turno,conductor,codigo,patente,kilometraje,observaciones_generales:observaciones,
+          area_mina: areaMina?"SI":"NO", id_vehiculo:idVehiculo,
+          licencia_clase:licenciaClase, licencia_vence:licenciaVence, autorizacion_interna:autorizacionInterna,
+          experiencia_anios:experienciaAnios, mant_ultima:mantUltima, mant_proxima:mantProxima,
+          cert_tecnica_fecha:certTecnicaFecha, extintor_vence:extintorVence,
+          horas_sueno_24h:horasSueno24h, ultimo_descanso_hora:ultimoDescansoHora,
+        };
+        getActiveGroups(areaMina).forEach(g=>g.items.forEach(it=>{
+          row[it.id] = (answers[it.id]||{}).value || "";
+          row[it.id+"_obs"] = (answers[it.id]||{}).obs || "";
+        }));
+        return row;
+      }
+
+      function buildSchemaString(){
+        const baseKeys = ["fecha","hora","turno","conductor","codigo","patente","kilometraje","observaciones_generales",
+        "area_mina","id_vehiculo","licencia_clase","licencia_vence","autorizacion_interna","experiencia_anios",
+        "mant_ultima","mant_proxima","cert_tecnica_fecha","extintor_vence","horas_sueno_24h","ultimo_descanso_hora"];
+        const keys=[...baseKeys]; ITEMS.forEach(g=>g.items.forEach(it=>{ keys.push(it.id); keys.push(it.id+"_obs"); }));
+        const props={}; keys.forEach(k=>props[k]={type:"string"});
+        const required=["fecha","hora","turno","conductor","patente","kilometraje"];
+        return JSON.stringify({type:"object",properties:props,required,additionalProperties:true},null,2);
+      }
+      function buildSamplePayloadString(){
+        const s = buildRow();
+        if(!s.conductor) s.conductor="Juan Pérez";
+        if(!s.codigo) s.codigo="EMP001";
+        if(!s.patente) s.patente="AA-BB-11";
+        if(!s.kilometraje) s.kilometraje="123456";
+        return JSON.stringify(s,null,2);
+      }
+
+      async function onSubmit(){
+        const row = buildRow();
+        const resp = await sendToSharePoint(row, flowUrl);
+        if(resp.ok) setSyncStatus({ok:true, msg:"Enviado a SharePoint ✅"});
+        else if(resp.skipped) setSyncStatus({ok:false, msg:"No se envió: configura FLOW_ENDPOINT"});
+        else { setSyncStatus({ok:false, msg:"Error al enviar. Guardado en pendientes."}); setOutbox(prev=>[row,...prev].slice(0,2000)); }
+        const next = [row, ...(saved||[])].slice(0,2000);
+        setSaved(next); localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        setDate(todayISODate()); setTime(nowLocalTime()); setTurno("Día"); setKilometraje("");
+        setAnswers(defaultAnswers()); setObservaciones("");
+      }
+
+      function downloadCSV(){
+        const csv = toCSV(saved||[]);
+        const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob); a.download = "checklists.csv"; a.click();
+        URL.revokeObjectURL(a.href);
+      }
+
+      // UI helper to create elements with classes
+      function el(tag, cls, children){ const e=document.createElement(tag); if(cls) e.className=cls; (children||[]).forEach(c=>e.appendChild(c)); return e; }
+      function txt(t){ return document.createTextNode(t); }
+      function input(type, value, on){ const i=document.createElement("input"); i.type=type; if(value!=null) i.value=value; if(on) i.oninput=on; return i; }
+      function select(options, value, on){ const s=document.createElement("select"); options.forEach(o=>{ const op=document.createElement("option"); op.text=o; if(o===value) op.selected=true; s.appendChild(op); }); if(on) s.onchange=on; return s; }
+
+      // Render with React DOM using JS elements
+      return React.createElement("div",{className:"min-h-screen bg-slate-50 p-6"},[
+        React.createElement("div",{className:"mx-auto max-w-6xl", key:"wrap"},[
+          React.createElement("header",{className:"mb-6", key:"hdr"},[
+            React.createElement("h1",{className:"text-2xl font-bold", key:"h1"},"Checklist Vehicular Diario"),
+            React.createElement("p",{className:"text-slate-600", key:"p"},"Escanea el QR con el celular, completa el formulario y se guardará en tu Excel de SharePoint (con respaldo local/offline)."),
+          ]),
+          !kiosk && React.createElement("section",{className:"bg-white rounded-2xl shadow p-4 mb-4", key:"cfg"},[
+            React.createElement("h3",{className:"font-semibold mb-3"},"Configuración rápida"),
+            React.createElement("div",{className:"grid grid-cols-1 md:grid-cols-3 gap-4"},[
+              (function(){ const w=el("div","flex flex-col",[
+                el("label","text-sm text-slate-600",[txt("URL pública del formulario (para QR en celulares)")]),
+                (function(){ const i=input("text", localStorage.getItem("veh-public-url")||baseUrl, (e)=>{ setPublicUrl(e.target.value); }); i.className="rounded-xl border p-2"; return i; })(),
+                el("p","text-xs text-slate-500 mt-1",[txt("Debe ser una URL pública (Vercel/Netlify/GitHub Pages o SharePoint).")])
+              ]); return w; })(),
+              (function(){ const w=el("div","flex flex-col",[
+                el("label","text-sm text-slate-600",[txt("FLOW_ENDPOINT (Power Automate)")]),
+                (function(){ const i=input("text", flowUrl, (e)=>{ setFlowUrl(e.target.value); }); i.className="rounded-xl border p-2"; return i; })(),
+                el("p","text-xs text-slate-500 mt-1",[txt("Pega la URL del disparador HTTP que inserta en tu Excel.")])
+              ]); return w; })(),
+              (function(){ const w=el("div","flex flex-col",[
+                el("label","text-sm text-slate-600",[txt("Link base de datos (Excel/SharePoint)")]),
+                (function(){ const i=input("text", csvUrl, (e)=>{ setCsvUrl(e.target.value); }); i.className="rounded-xl border p-2"; return i; })(),
+              ]); return w; })(),
+            ])
+          ]),
+          !kiosk && React.createElement("section",{className:"mt-4 bg-white rounded-2xl shadow p-4", key:"qrs"},[
+            React.createElement("h3",{className:"font-semibold mb-3"},"Códigos QR"),
+            React.createElement("p",{className:"text-sm text-slate-600 mb-4"},["Imprime y pega estos códigos: el ", React.createElement("strong",null,"Formulario"), " (conductores) y el de ", React.createElement("strong",null,"Base de datos"), " (administración)."]),
+            React.createElement("div",{className:"grid grid-cols-1 md:grid-cols-2 gap-6"},[
+              (function(){ const url = (publicUrl||baseUrl) + ((publicUrl||baseUrl).includes("?") ? "&kiosk=1" : "?kiosk=1");
+                const left = el("div","flex items-start gap-6",[
+                  (function(){ const box=el("div","bg-slate-50 p-4 rounded-2xl border inline-block",[]); box.appendChild(QRCodeCanvas({value:url,size:180,includeMargin:true})); return box; })(),
+                  (function(){
+                    const col=el("div","flex-1",[
+                      el("div","font-medium",[txt("Formulario (para conductores)")]),
+                      (function(){ const d=el("div","text-sm break-all mb-2",[]); d.appendChild(el("span","font-medium",[txt("Enlace:")])); d.appendChild(txt(" "+url)); return d; })(),
+                      (function(){ const w=el("div","flex flex-wrap gap-3",[]);
+                        const btnCopy = el("button","px-4 py-2 rounded-xl bg-slate-700 text-white shadow",[txt("Copiar enlace")]); btnCopy.onclick=()=>{ navigator.clipboard.writeText(url); alert("Enlace copiado ✅"); };
+                        const btnOpen = el("a","px-4 py-2 rounded-xl bg-slate-200 text-slate-900 shadow",[txt("Abrir aquí")]); btnOpen.href=url; btnOpen.target="_blank";
+                        w.appendChild(btnCopy); w.appendChild(btnOpen); return w; })(),
+                    ]); return col; })()
+                ]); return left; })(),
+              (function(){ const url = csvUrl || DB_DEFAULT_URL;
+                const right = el("div","flex items-start gap-6",[
+                  (function(){ const box=el("div","bg-slate-50 p-4 rounded-2xl border inline-block",[]); box.appendChild(QRCodeCanvas({value:url,size:180,includeMargin:true})); return box; })(),
+                  (function(){
+                    const col=el("div","flex-1",[
+                      el("div","font-medium",[txt("Base de datos (administración)")]),
+                      (function(){ const d=el("div","text-sm break-all mb-2",[]); d.appendChild(el("span","font-medium",[txt("Enlace:")])); d.appendChild(txt(" "+url)); return d; })(),
+                      (function(){ const w=el("div","flex flex-wrap gap-3",[]);
+                        const btnOpen = el("a","px-4 py-2 rounded-xl bg-slate-200 text-slate-900 shadow",[txt("Abrir base")]); btnOpen.href=url; btnOpen.target="_blank";
+                        w.appendChild(btnOpen); return w; })(),
+                    ]); return col; })()
+                ]); return right; })(),
+            ])
+          ]),
+          // Datos generales
+          React.createElement("section",{className:"grid grid-cols-1 md:grid-cols-4 gap-4 mb-6 mt-6", key:"gen"},[
+            (function(){ const w=el("div","flex flex-col",[el("label","text-sm text-slate-600",[txt("Fecha")])]); const i=document.createElement("input"); i.type="date"; i.value=date; i.className="rounded-xl border p-2"; i.oninput=e=>setDate(e.target.value); w.appendChild(i); return w; })(),
+            (function(){ const w=el("div","flex flex-col",[el("label","text-sm text-slate-600",[txt("Hora")])]); const i=document.createElement("input"); i.type="time"; i.value=time; i.className="rounded-xl border p-2"; i.oninput=e=>setTime(e.target.value); w.appendChild(i); return w; })(),
+            (function(){ const w=el("div","flex flex-col",[el("label","text-sm text-slate-600",[txt("Turno")])]); const s=select(["Día","Noche"],turno,e=>setTurno(e.target.value)); s.className="rounded-xl border p-2"; w.appendChild(s); return w; })(),
+            (function(){ const w=el("div","flex flex-col",[el("label","text-sm text-slate-600",[txt("Kilometraje")])]); const i=document.createElement("input"); i.type="number"; i.min=0; i.step=1; i.placeholder="0"; i.value=kilometraje; i.className="rounded-xl border p-2"; i.oninput=e=>setKilometraje(e.target.value); w.appendChild(i); return w; })(),
+            (function(){ const w=el("div","flex flex-col md:col-span-2",[el("label","text-sm text-slate-600",[txt("Conductor")])]); const i=document.createElement("input"); i.type="text"; i.value=conductor; i.placeholder="Nombre y Apellido"; i.className="rounded-xl border p-2"; i.oninput=e=>setConductor(e.target.value); w.appendChild(i); return w; })(),
+            (function(){ const w=el("div","flex flex-col",[el("label","text-sm text-slate-600",[txt("Código personal")])]); const i=document.createElement("input"); i.type="text"; i.value=codigo; i.placeholder="ID/Legajo"; i.className="rounded-xl border p-2"; i.oninput=e=>setCodigo(e.target.value); w.appendChild(i); return w; })(),
+            (function(){ const w=el("div","flex flex-col",[el("label","text-sm text-slate-600",[txt("Patente")])]); const i=document.createElement("input"); i.type="text"; i.value=patente; i.placeholder="AA-BB-11"; i.className="rounded-xl border p-2"; i.oninput=e=>setPatente(e.target.value); w.appendChild(i); return w; })(),
+          ]),
+          // Datos EPF
+          React.createElement("section",{className:"bg-white rounded-2xl shadow p-4 mb-6", key:"epf"},[
+            React.createElement("h3",{className:"font-semibold mb-3"},"Datos del conductor y vehículo (EPF)"),
+            (function(){
+              const g=el("div","grid grid-cols-1 md:grid-cols-4 gap-4",[]);
+              const mk = (label, node)=>{ const w=el("div","flex flex-col",[el("label","text-sm text-slate-600",[txt(label)]), node]); return w; };
+              const s1=select(["NO","SI"], areaMina?"SI":"NO", e=>setAreaMina(e.target.value==="SI")); s1.className="rounded-xl border p-2";
+              g.appendChild(mk("¿Opera en Área Mina?", s1));
+              const i1=document.createElement("input"); i1.className="rounded-xl border p-2"; i1.placeholder="ID grande visible"; i1.value=idVehiculo; i1.oninput=e=>setIdVehiculo(e.target.value); g.appendChild(mk("ID vehículo (n° visible)", i1));
+              const i2=document.createElement("input"); i2.className="rounded-xl border p-2"; i2.placeholder="B / A3 / A5..."; i2.value=licenciaClase; i2.oninput=e=>setLicenciaClase(e.target.value); g.appendChild(mk("Licencia clase", i2));
+              const i3=document.createElement("input"); i3.type="date"; i3.className="rounded-xl border p-2"; i3.value=licenciaVence; i3.oninput=e=>setLicenciaVence(e.target.value); g.appendChild(mk("Vence licencia", i3));
+              const s2=select(["SI","NO"], autorizacionInterna, e=>setAutorizacionInterna(e.target.value)); s2.className="rounded-xl border p-2"; g.appendChild(mk("Autorización interna", s2));
+              const i4=document.createElement("input"); i4.type="number"; i4.min=0; i4.step=1; i4.className="rounded-xl border p-2"; i4.value=experienciaAnios; i4.oninput=e=>setExperienciaAnios(e.target.value); g.appendChild(mk("Años de experiencia", i4));
+              const i5=document.createElement("input"); i5.type="date"; i5.className="rounded-xl border p-2"; i5.value=mantUltima; i5.oninput=e=>setMantUltima(e.target.value); g.appendChild(mk("Última mantención", i5));
+              const i6=document.createElement("input"); i6.type="date"; i6.className="rounded-xl border p-2"; i6.value=mantProxima; i6.oninput=e=>setMantProxima(e.target.value); g.appendChild(mk("Próxima mantención", i6));
+              const i7=document.createElement("input"); i7.type="date"; i7.className="rounded-xl border p-2"; i7.value=certTecnicaFecha; i7.oninput=e=>setCertTecnicaFecha(e.target.value); g.appendChild(mk("Certificación técnica (fecha)", i7));
+              const i8=document.createElement("input"); i8.type="date"; i8.className="rounded-xl border p-2"; i8.value=extintorVence; i8.oninput=e=>setExtintorVence(e.target.value); g.appendChild(mk("Extintor: mantención vence", i8));
+              const i9=document.createElement("input"); i9.type="number"; i9.min=0; i9.max=24; i9.step=1; i9.className="rounded-xl border p-2"; i9.value=horasSueno24h; i9.oninput=e=>setHorasSueno24h(e.target.value); g.appendChild(mk("Horas de sueño (últimas 24h)", i9));
+              const i10=document.createElement("input"); i10.type="time"; i10.className="rounded-xl border p-2"; i10.value=ultimoDescansoHora; i10.oninput=e=>setUltimoDescansoHora(e.target.value); g.appendChild(mk("Último descanso (hora)", i10));
+              return g;
+            })()
+          ]),
+          // Checklist groups
+          React.createElement("section",{className:"space-y-6", key:"groups"},
+            getActiveGroups(areaMina).map(group=>React.createElement("div",{className:"bg-white rounded-2xl shadow p-4", key:group.key},[
+              React.createElement("h2",{className:"text-lg font-semibold mb-3"},group.title),
+              // Desktop table
+              React.createElement("div",{className:"overflow-x-auto hidden md:block"},[
+                (function(){
+                  const table = el("table","min-w-full text-sm",[]);
+                  const thead = el("thead","",[]);
+                  const tr = el("tr","text-left",[
+                    el("th","py-2 pr-3",[txt("Ítem")]),
+                    el("th","py-2 px-3",[txt("Sí")]),
+                    el("th","py-2 px-3",[txt("No")]),
+                    el("th","py-2 px-3",[txt("N/A")]),
+                    el("th","py-2 px-3 w-1/2",[txt("Observación (obligatoria si marca NO)")]),
+                  ]); thead.appendChild(tr); table.appendChild(thead);
+                  const tbody = el("tbody","",[]);
+                  group.items.forEach(it=>{
+                    const row = el("tr","border-t",[]);
+                    row.appendChild(el("td","py-2 pr-3 font-medium",[txt(it.label)]));
+                    ["SI","NO","NA"].forEach(opt=>{
+                      const td = el("td","py-2 px-3",[]);
+                      const label = el("label","inline-flex items-center gap-2 cursor-pointer",[]);
+                      const inp = document.createElement("input"); inp.type="radio"; inp.className="w-5 h-5"; inp.name = it.id; inp.checked = (answers[it.id]||{}).value===opt; inp.onchange=()=>handleSelect(it.id,opt);
+                      label.appendChild(inp); label.appendChild(el("span","sr-only",[txt(opt)]));
+                      td.appendChild(label); row.appendChild(td);
+                    });
+                    const tdObs = el("td","py-2 px-3",[]);
+                    const txtObs = document.createElement("input"); txtObs.type="text"; txtObs.placeholder="Detalle si corresponde"; txtObs.className="w-full border rounded-lg p-2"; txtObs.value=(answers[it.id]||{}).obs||""; txtObs.oninput=e=>handleObs(it.id, e.target.value);
+                    tdObs.appendChild(txtObs); row.appendChild(tdObs);
+                    tbody.appendChild(row);
+                  });
+                  table.appendChild(tbody);
+                  return table;
+                })()
+              ]),
+              // Mobile cards
+              React.createElement("div",{className:"md:hidden space-y-3"}, group.items.map(it=>{
+                const card = el("div","border rounded-xl p-3",[]);
+                card.appendChild(el("div","font-medium mb-2",[txt(it.label)]));
+                const choices = el("div","flex items-center gap-6 mb-2",[]);
+                ["SI","NO","NA"].forEach(opt=>{
+                  const lab = el("label","inline-flex items-center gap-2",[]);
+                  const inp = document.createElement("input"); inp.type="radio"; inp.className="w-5 h-5"; inp.name = it.id; inp.checked = (answers[it.id]||{}).value===opt; inp.onchange=()=>handleSelect(it.id,opt);
+                  lab.appendChild(inp); lab.appendChild(txt(opt));
+                  choices.appendChild(lab);
+                });
+                const obs = document.createElement("input"); obs.type="text"; obs.placeholder="Observación (obligatoria si marca NO)"; obs.className="w-full border rounded-lg p-2"; obs.value=(answers[it.id]||{}).obs||""; obs.oninput=e=>handleObs(it.id,e.target.value);
+                card.appendChild(choices); card.appendChild(obs);
+                return card;
+              }))
+            ]))
+          ),
+          // Observaciones
+          React.createElement("section",{className:"bg-white rounded-2xl shadow p-4 mt-6", key:"obs"},[
+            React.createElement("label",{className:"text-sm text-slate-600"},"Observaciones generales"),
+            (function(){ const t=document.createElement("textarea"); t.className="w-full border rounded-xl p-3 mt-2"; t.rows=3; t.value=observaciones; t.placeholder="Notas adicionales, novedades, etc."; t.oninput=e=>setObservaciones(e.target.value); return t; })()
+          ]),
+          // Actions
+          React.createElement("section",{className:"flex flex-wrap gap-3 mt-6", key:"act"},[
+            (function(){ const b=el("button","px-5 py-3 rounded-2xl shadow", [txt("Guardar checklist")]); b.disabled=!canSubmit; b.className += " "+(canSubmit?"bg-emerald-600 text-white":"bg-slate-300 text-slate-600"); b.onclick=onSubmit; return b; })(),
+            !kiosk && (function(){ const b=el("button","px-5 py-3 rounded-2xl shadow bg-indigo-600 text-white",[txt("Descargar CSV (histórico local)")]); b.onclick=downloadCSV; return b; })(),
+            !kiosk && outbox.length>0 && (function(){ const b=el("button","px-5 py-3 rounded-2xl shadow bg-amber-600 text-white",[txt("Reintentar envíos pendientes ("+outbox.length+")")]); b.onclick=()=>{(async()=>{await flushOutbox()})()}; return b; })(),
+          ]),
+          (syncStatus.msg ? React.createElement("div",{className:"mt-3 text-sm "+(syncStatus.ok?"text-emerald-700":"text-amber-700")}, syncStatus.msg) : null),
+          // DB link (admin)
+          !kiosk && React.createElement("section",{className:"mt-8 bg-white rounded-2xl shadow p-4", key:"db"},[
+            React.createElement("h3",{className:"font-semibold mb-3"},"Base de datos (Google Sheets / SharePoint)"),
+            React.createElement("p",{className:"text-sm text-slate-600 mb-2"},"Pega un link CSV de Google Sheets o un Excel de SharePoint/OneDrive."),
+            (function(){ const wrap=el("div","flex gap-3 flex-col md:flex-row",[]);
+              const i=input("text", csvUrl, e=>setCsvUrl(e.target.value)); i.className="flex-1 rounded-xl border p-2"; wrap.appendChild(i);
+              const a=document.createElement("a"); a.className="px-4 py-2 rounded-xl bg-indigo-600 text-white shadow text-center"; a.href=csvUrl; a.target="_blank"; a.textContent="Abrir base (CSV/Excel)"; wrap.appendChild(a);
+              return wrap;
+            })()
+          ]),
+          // Power Automate hints
+          !kiosk && React.createElement("section",{className:"mt-8 bg-white rounded-2xl shadow p-4", key:"integ"},[
+            React.createElement("h3",{className:"font-semibold mb-3"},"Integración a SharePoint (Power Automate)"),
+            React.createElement("ol",{className:"list-decimal pl-5 text-sm text-slate-700 space-y-2"},[
+              React.createElement("li",null,"When an HTTP request is received"),
+              React.createElement("li",null,"Add a row into a table (Excel Online Business)"),
+              React.createElement("li",null,"Response 200 con {"ok": true} y CORS: Access-Control-Allow-Origin: *"),
+              React.createElement("li",null,"Pega la URL del trigger en FLOW_ENDPOINT o pásala por ?flow="),
+            ]),
+            React.createElement("div",{className:"mt-4 grid grid-cols-1 md:grid-cols-2 gap-4"},[
+              (function(){ const box=el("div","",[]);
+                box.appendChild(el("div","font-medium mb-2",[txt("Esquema JSON (trigger)")]));
+
+                const pre=document.createElement("pre"); pre.className="bg-slate-50 p-3 rounded-xl text-xs overflow-auto"; pre.style.maxHeight="260px";
+                // schema
+                const baseKeys=["fecha","hora","turno","conductor","codigo","patente","kilometraje","observaciones_generales","area_mina","id_vehiculo","licencia_clase","licencia_vence","autorizacion_interna","experiencia_anios","mant_ultima","mant_proxima","cert_tecnica_fecha","extintor_vence","horas_sueno_24h","ultimo_descanso_hora"];
+                const keys=[...baseKeys]; ITEMS.forEach(g=>g.items.forEach(it=>{ keys.push(it.id); keys.push(it.id+"_obs"); }));
+                const props={}; keys.forEach(k=>props[k]={type:"string"}); const required=["fecha","hora","turno","conductor","patente","kilometraje"];
+                pre.textContent = JSON.stringify({type:"object",properties:props,required,additionalProperties:true},null,2);
+                box.appendChild(pre);
+                return box;
+              })(),
+              (function(){ const box=el("div","",[]);
+                box.appendChild(el("div","font-medium mb-2",[txt("Ejemplo de payload")]));
+                const pre=document.createElement("pre"); pre.className="bg-slate-50 p-3 rounded-xl text-xs overflow-auto"; pre.style.maxHeight="260px";
+                pre.textContent = JSON.stringify({ejemplo:"Completa el formulario y presiona Guardar para ver aquí un ejemplo real."},null,2);
+                box.appendChild(pre);
+                return box;
+              })(),
+            ]),
+          ]),
+          React.createElement("footer",{className:"text-xs text-slate-500 mt-10"},[
+            React.createElement("p",null,"Funciona en móvil y escritorio; respaldo local y reintentos offline. Define una URL pública y pega tu FLOW_ENDPOINT para que el QR funcione en celulares y se escriba en Excel.")
+          ])
+        ])
+      ]);
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(React.createElement(App));
+    </script>
+  </body>
+</html>
